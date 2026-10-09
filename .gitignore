@@ -3,7 +3,8 @@ output/
 
 # Purple Knight reports must never be committed
 /*.html
-reports/
+reports/*
+!reports/.gitkeep
 Security_Assessment_Report*.html
 Security_Assessment_Report*.xlsx
 

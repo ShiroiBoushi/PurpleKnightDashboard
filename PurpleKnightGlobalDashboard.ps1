@@ -30,7 +30,7 @@ $PSDefaultParameterValues = @{
 }
 
 if (!$ReportPath) {
-    $htmlFiles = Get-File -Directory $PSScriptRoot -Filter 'Purple Knight HTML report (*.html)|*.html' | ForEach-Object { Get-Item -Path $_ }
+    $htmlFiles = Get-File -Directory "$PSScriptRoot\reports" -Filter 'Purple Knight HTML report (*.html)|*.html' | ForEach-Object { Get-Item -Path $_ }
 }
 else {
     $htmlFiles = Get-ChildItem -Path $ReportPath -Filter '*.html' -Recurse
@@ -104,6 +104,19 @@ New-HTML -Name 'Global - Purple Knight dashboard' -FilePath $filePath -Encoding 
                 @{Name = 'LastDomain'; Expression = { $lastReport.Domain } }
             }
 
+            # Exposed in the latest report of a domain but not in its first report
+            $riskNewSince = $lastReports | ForEach-Object {
+                $report = $_
+                $domainReports = @($reports | Where-Object { $_.Domain -eq $report.Domain })
+                $firstIds = @($domainReports[0].Exposures.IndicatorId)
+                $report.Exposures | Where-Object { $_.IndicatorId -notin $firstIds } | ForEach-Object {
+                    $indicatorId = $_.IndicatorId
+                    $firstAppearance = @($domainReports | Where-Object { $_.Exposures.IndicatorId -contains $indicatorId })[0].Month
+                    $_ | Select-Object @{Name = 'Domain'; Expression = { $report.Domain } }, Points, Severity, ANSSI, Category, IndicatorId, Name,
+                    @{Name = 'FirstAppearance'; Expression = { $firstAppearance } }
+                }
+            }
+
             $latestScores = $lastReports | ForEach-Object {
                 $report = $_
                 $row = [ordered]@{
@@ -136,6 +149,22 @@ New-HTML -Name 'Global - Purple Knight dashboard' -FilePath $filePath -Encoding 
                 $exposure = $_
                 $global = $domains | ForEach-Object { $exposure.$_ } | Where-Object { $null -ne $_ }
                 if (($global | Measure-Object).Count -ge 1) { $_.Global = ($global | Measure-Object -Sum).Sum }
+            }
+
+            # New exposures and remediations
+            New-HTMLSection -HeaderText 'Improvement & deterioration (first to latest report of each domain)' {
+                New-HTMLPanel {
+                    New-HTMLSection -Invisible -Margin 0 -AlignItems center -JustifyContent flex-start -BackgroundColor $Colors.Negative {
+                        New-HTMLHeading h2 -HeadingText "New exposures ($(@($riskNewSince).Count))"
+                    }
+                    New-HTMLTable -DataTable $riskNewSince -DefaultSortColumn 'Points' -DefaultSortOrder Descending -HideButtons -DisablePaging
+                }
+                New-HTMLPanel {
+                    New-HTMLSection -Invisible -Margin 0 -AlignItems center -JustifyContent flex-start -BackgroundColor $Colors.Positive {
+                        New-HTMLHeading h2 -HeadingText "Exposures resolved ($(@($riskSolvedSince).Count))"
+                    }
+                    New-HTMLTable -DataTable $riskSolvedSince -DefaultSortColumn 'LastAppearance' -DefaultSortOrder Descending -HideButtons -DisablePaging
+                }
             }
 
             # Diagrams for global score
@@ -212,11 +241,6 @@ New-HTML -Name 'Global - Purple Knight dashboard' -FilePath $filePath -Encoding 
                     }
                     New-ScoreConditions -Names (@('Security score') + $categoryNames)
                 }
-            }
-
-            # Remediations
-            New-HTMLSection -HeaderText 'Remediations' {
-                New-HTMLTable -Title 'All exposures solved' -DataTable $riskSolvedSince -DefaultSortColumn 'LastAppearance' -DefaultSortOrder Descending -DisablePaging
             }
 
             # Exposures per domain

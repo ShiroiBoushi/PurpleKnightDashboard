@@ -30,7 +30,7 @@ $PSDefaultParameterValues = @{
 }
 
 if (!$ReportPath) {
-    $htmlFiles = Get-File -Directory $PSScriptRoot -Filter 'Purple Knight HTML report (*.html)|*.html' | ForEach-Object { Get-Item -Path $_ }
+    $htmlFiles = Get-File -Directory "$PSScriptRoot\reports" -Filter 'Purple Knight HTML report (*.html)|*.html' | ForEach-Object { Get-Item -Path $_ }
 }
 else {
     $htmlFiles = Get-ChildItem -Path $ReportPath -Filter '*.html' -Recurse
@@ -78,6 +78,12 @@ $reports.Domain | Sort-Object -Unique | ForEach-Object {
                     $lastAppearance = @($domainReports | Where-Object { $_.Exposures.IndicatorId -contains $indicatorId })[-1].Label
                     $_ | Select-Object Severity, ANSSI, Category, IndicatorId, Name, @{Name = 'LastAppearance'; Expression = { $lastAppearance } }
                 }
+                $firstIds = @($firstReport.Exposures.IndicatorId)
+                $riskNewSince = $lastReport.Exposures | Where-Object { $_.IndicatorId -notin $firstIds } | ForEach-Object {
+                    $indicatorId = $_.IndicatorId
+                    $firstAppearance = @($domainReports | Where-Object { $_.Exposures.IndicatorId -contains $indicatorId })[0].Label
+                    $_ | Select-Object Points, Severity, ANSSI, Category, IndicatorId, Name, Score, Results, @{Name = 'FirstAppearance'; Expression = { $firstAppearance } }
+                }
 
                 $scores = $domainReports | ForEach-Object {
                     $report = $_
@@ -112,6 +118,24 @@ $reports.Domain | Sort-Object -Unique | ForEach-Object {
                 $chartLineScore = $domainReports | ForEach-Object { $_.Score }
                 $chartLinePoints = $domainReports | ForEach-Object { Get-RiskPoints $_.Exposures }
                 $chartLineMaturity = $domainReports | ForEach-Object { [int]$_.Maturity }
+
+                # New exposures and remediations between the first and the last report
+                New-HTMLSection -HeaderText "Improvement & deterioration ($($firstReport.Label) to $($lastReport.Label))" {
+                    New-HTMLPanel {
+                        # Exposed in the last report but not in the first one (deterioration)
+                        New-HTMLSection -Invisible -Margin 0 -AlignItems center -JustifyContent flex-start -BackgroundColor $Colors.Negative {
+                            New-HTMLHeading h2 -HeadingText "New exposures ($(@($riskNewSince).Count))"
+                        }
+                        New-HTMLTable -DataTable $riskNewSince -DefaultSortIndex 0 -DefaultSortOrder Descending -HideButtons -DisablePaging
+                    }
+                    New-HTMLPanel {
+                        # Exposed in a previous report but not in the last one (improvement)
+                        New-HTMLSection -Invisible -Margin 0 -AlignItems center -JustifyContent flex-start -BackgroundColor $Colors.Positive {
+                            New-HTMLHeading h2 -HeadingText "Exposures resolved ($(@($riskSolvedSince).Count))"
+                        }
+                        New-HTMLTable -DataTable $riskSolvedSince -DefaultSortColumn 'LastAppearance' -DefaultSortOrder Descending -HideButtons -DisablePaging
+                    }
+                }
 
                 # Diagrams for global score
                 New-HTMLSection -HeaderText 'Evolution of security score and exposures' {
@@ -163,11 +187,6 @@ $reports.Domain | Sort-Object -Unique | ForEach-Object {
                             }
                         }
                     }
-                }
-
-                # Remediations
-                New-HTMLSection -HeaderText 'Remediations' {
-                    New-HTMLTable -Title 'All exposures solved' -DataTable $riskSolvedSince -DefaultSortColumn 'LastAppearance' -DefaultSortOrder Descending -DisablePaging
                 }
 
                 # Scores

@@ -53,6 +53,8 @@ function Get-File {
         [string]$Filter = 'All files (*.*)|*.*'
     )
 
+    if (!(Test-Path -Path $Directory -PathType Container)) { $Directory = $PSScriptRoot }
+
     $null = [System.Reflection.Assembly]::LoadWithPartialName("System.windows.forms")
     $OpenFileDialog = New-Object System.Windows.Forms.OpenFileDialog
     $OpenFileDialog.InitialDirectory = (Get-Item $Directory).FullName

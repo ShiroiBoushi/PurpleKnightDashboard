@@ -1,0 +1,11 @@
+# Generated dashboards
+output/
+
+# Purple Knight reports must never be committed
+/*.html
+reports/
+Security_Assessment_Report*.html
+Security_Assessment_Report*.xlsx
+
+# Local tooling
+.claude/

@@ -1,9 +1,9 @@
 #Requires -Version 5.1
-#Requires -Modules @{ModuleName='PSWriteHTML';ModuleVersion='1.17.0'}
+#Requires -Modules @{ModuleName='PSWriteHTML';ModuleVersion='1.41.0'}
 
 param(
-    [System.IO.DirectoryInfo]$ReportPath,
-    [System.IO.DirectoryInfo]$OutputPath = "$PSScriptRoot\output",
+    [string]$ReportPath,
+    [string]$OutputPath = "$PSScriptRoot\output",
     [string]$DateFormat = 'yyyy-MM-dd',
     [string]$URI = 'https://www.purple-knight.com',
     [string]$Logo,
@@ -15,30 +15,8 @@ param(
 
 . "$PSScriptRoot\Functions.ps1"
 
-$PSDefaultParameterValues = @{
-    'New-HTMLSection:HeaderBackGroundColor' = $Colors.Neutral
-    'New-HTMLSection:HeaderTextSize'        = 16
-    'New-HTMLSection:Margin'                = 20
-    'New-ChartBar:Color'                    = $Colors.Primary
-    'New-ChartLine:Color'                   = $Colors.Primary
-    'New-HTMLTable:HTML'                    = { { New-SeverityConditions } }
-    'New-HTMLTable*:WarningAction'          = 'SilentlyContinue'
-    'New-HTMLGage:MinValue'                 = 0
-    'New-HTMLGage:MaxValue'                 = 100
-    'New-HTMLGage:Pointer'                  = $true
-    'New-HTMLGage:LevelColors'              = $GageColors
-}
-
-if (!$ReportPath) {
-    $htmlFiles = Get-File -Directory "$PSScriptRoot\reports" -Filter 'Purple Knight HTML report (*.html)|*.html' | ForEach-Object { Get-Item -Path $_ }
-}
-else {
-    $htmlFiles = Get-ChildItem -Path $ReportPath -Filter '*.html' -Recurse
-}
-
-if (!(Test-Path -Path $OutputPath.FullName -PathType Container)) {
-    $null = New-Item -Path $OutputPath.FullName -ItemType Directory
-}
+$htmlFiles = Get-ReportFiles -ReportPath $ReportPath
+$OutputPath = Initialize-OutputPath -Path $OutputPath
 
 $allReports = Import-PurpleKnightReports -Files $htmlFiles -ExceptionsPath "$PSScriptRoot\data\exceptions.csv" -DateFormat $DateFormat
 if (!$allReports) {
@@ -54,15 +32,18 @@ $allReports | ForEach-Object { $_.Month = Get-Date $_.Date -Format 'yyyy-MM' }
 $reports = @($allReports | Sort-Object -Property Date -Descending | Group-Object -Property Domain, Month | ForEach-Object { $_.Group | Select-Object -First 1 } | Sort-Object -Property Date)
 
 $domains = @($reports.Domain | Sort-Object -Unique)
-$months = @($reports.Month | Sort-Object -Unique)
-$allExposures = $reports.Exposures | Sort-Object -Unique -Property IndicatorId
-$categoryNames = @($reports.Categories | Where-Object { $_.Included } | Sort-Object ID | ForEach-Object { $_.Name } | Select-Object -Unique)
 
 # Limit to 10 domains for better readability of charts
 if ($domains.Count -gt 10) {
     Write-Warning "More than 10 domains found, only the 10 first will be kept for charts readability"
     $domains = $domains | Select-Object -First 10
+    # Drop the other domains everywhere, or their open exposures would be listed as resolved
+    $reports = @($reports | Where-Object { $_.Domain -in $domains })
 }
+
+$months = @($reports.Month | Sort-Object -Unique)
+$allExposures = $reports.Exposures | Sort-Object -Unique -Property IndicatorId
+$categoryNames = @($reports.Categories | Where-Object { $_.Included } | Sort-Object ID | ForEach-Object { $_.Name } | Select-Object -Unique)
 
 # Return one value per month for a domain ($null when there is no report this month)
 function Get-MonthlyValues {
@@ -118,20 +99,8 @@ New-HTML -Name 'Global - Purple Knight dashboard' -FilePath $filePath -Encoding 
             }
 
             $latestScores = $lastReports | ForEach-Object {
-                $report = $_
-                $row = [ordered]@{
-                    Domain           = $report.Domain
-                    Date             = $report.Label
-                    Grade            = $report.Grade
-                    'Security score' = $report.Score
-                    'ANSSI'          = $report.Maturity
-                    'Risk points'    = Get-RiskPoints $report.Exposures
-                    Exposures        = $report.Exposures.Count
-                }
-                $categoryNames | ForEach-Object {
-                    $name = $_
-                    $row[$name] = ($report.Categories | Where-Object { $_.Name -eq $name }).Score
-                }
+                $row = Get-ScoreRow -Report $_ -CategoryNames $categoryNames
+                $row.Insert(0, 'Domain', $_.Domain)
                 [PSCustomObject]$row
             }
 
@@ -152,20 +121,7 @@ New-HTML -Name 'Global - Purple Knight dashboard' -FilePath $filePath -Encoding 
             }
 
             # New exposures and remediations
-            New-HTMLSection -HeaderText 'Improvement & deterioration (first to latest report of each domain)' {
-                New-HTMLPanel {
-                    New-HTMLSection -Invisible -Margin 0 -AlignItems center -JustifyContent flex-start -BackgroundColor $Colors.Negative {
-                        New-HTMLHeading h2 -HeadingText "New exposures ($(@($riskNewSince).Count))"
-                    }
-                    New-HTMLTable -DataTable $riskNewSince -DefaultSortColumn 'Points' -DefaultSortOrder Descending -HideButtons -DisablePaging
-                }
-                New-HTMLPanel {
-                    New-HTMLSection -Invisible -Margin 0 -AlignItems center -JustifyContent flex-start -BackgroundColor $Colors.Positive {
-                        New-HTMLHeading h2 -HeadingText "Exposures resolved ($(@($riskSolvedSince).Count))"
-                    }
-                    New-HTMLTable -DataTable $riskSolvedSince -DefaultSortColumn 'LastAppearance' -DefaultSortOrder Descending -HideButtons -DisablePaging
-                }
-            }
+            New-ChangesSection -Title 'Improvement & deterioration (first to latest report of each domain)' -New $riskNewSince -Resolved $riskSolvedSince -ResolvedSortColumn 'LastAppearance'
 
             # Diagrams for global score
             New-HTMLSection -HeaderText 'Evolution of security score and exposures' {
@@ -235,12 +191,7 @@ New-HTML -Name 'Global - Purple Knight dashboard' -FilePath $filePath -Encoding 
 
             # Latest scores
             New-HTMLSection -HeaderText 'Latest score per domain' {
-                New-HTMLTable -DataTable $latestScores -DefaultSortIndex 0 -DisablePaging {
-                    1..5 | ForEach-Object {
-                        New-HTMLTableCondition -Name 'ANSSI' -ComparisonType number -Operator eq -Value $_ -BackgroundColor $Colors."Level$_"
-                    }
-                    New-ScoreConditions -Names (@('Security score') + $categoryNames)
-                }
+                New-ScoreTable -DataTable $latestScores -CategoryNames $categoryNames
             }
 
             # Exposures per domain
@@ -273,5 +224,5 @@ New-HTML -Name 'Global - Purple Knight dashboard' -FilePath $filePath -Encoding 
     New-HTMLFooter -HTMLContent { $ExecutionContext.InvokeCommand.ExpandString([string](Get-Content -Path "$PSScriptRoot\data\footer.html" -Encoding UTF8)) }
 }
 
-Set-DashboardWidth -Path $filePath -MaxWidth $MaxWidth
+Update-DashboardHtml -Path $filePath -MaxWidth $MaxWidth
 if (!$DoNotShow.IsPresent) { Start-Process $filePath }

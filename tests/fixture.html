@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<!-- Minimal synthetic Purple Knight report used by Test-Parser.ps1 (fake data, same structure as a real report) -->
+<html>
+<head>
+<script>
+ window.reportJSON = {
+  "reportResultsList": [
+    {
+      "ADType": "AD",
+      "ForestName": "contoso.com",
+      "SelectedDomains": [ "contoso.com" ],
+      "UserName": "CONTOSO\\admin",
+      "ReportResults": {
+        "TotalScore": 72,
+        "TotalGrade": "CMinus",
+        "GeneratedOn": "2026-01-15T10:00:00Z",
+        "TestExecutionTime": "00:01:02.1234567",
+        "TotalEvaluatedCount": 4,
+        "PassedCount": 1
+      },
+      "ReportCategories": [
+        {
+          "Category": { "ID": 1, "Name": "AD Delegation", "Score": 80, "Grade": "BMinus", "Weight": 3, "IncludeInCalculation": true },
+          "Indicators": [ "00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000002" ]
+        },
+        {
+          "Category": { "ID": 2, "Name": "Account Security", "Score": 60, "Grade": "D", "Weight": 6, "IncludeInCalculation": true },
+          "Indicators": [ "00000000-0000-0000-0000-000000000003", "00000000-0000-0000-0000-000000000004" ]
+        }
+      ]
+    }
+  ],
+  "ANSIIAppendix": [
+    { "Level": 1, "Indicators": [ "00000000-0000-0000-0000-000000000003" ] },
+    { "Level": 3, "Indicators": [ "00000000-0000-0000-0000-000000000002", "00000000-0000-0000-0000-000000000003" ] }
+  ],
+  "AppVersion": "5.0.0.0",
+  "Edition": { "Name": "Community" }
+};
+</script>
+</head>
+<body>
+<script>
+ window.reportJSON.GeneralConfig.Categories.map((c) => "Category_" + c.ID).forEach((n) => { window[n] = { } });window["Category_1"]["00000000-0000-0000-0000-000000000001"] = {
+  "ResIndicator": { "IsFailed": false, "ShortName": "SI000001", "Name": "Passed indicator", "Weight": 2, "Severity": "Low", "State": "Completed", "SecurityFrameworks": [] },
+  "ExecutionResult": { "Status": "Pass", "Score": 100, "ResultMessage": "No evidence of exposure." },
+  "TotalResultsCount": 0
+};
+window["Category_1"]["00000000-0000-0000-0000-000000000002"] = {
+  "ResIndicator": { "IsFailed": true, "ShortName": "SI000002", "Name": "Medium exposure", "Weight": 4, "Severity": "Medium", "State": "Completed", "SecurityFrameworks": [ { "Name": "MITRE ATT&CK", "Tags": [ "Discovery" ] } ] },
+  "ExecutionResult": { "Status": "Failed", "Score": 50, "ResultMessage": "Found 2 objects." },
+  "TotalResultsCount": 2
+};
+window["Category_2"]["00000000-0000-0000-0000-000000000003"] = {
+  "ResIndicator": { "IsFailed": true, "ShortName": "SI000003", "Name": "Critical exposure", "Weight": 8, "Severity": "Critical", "State": "Completed", "SecurityFrameworks": [ { "Name": "MITRE ATT&CK", "Tags": [ "Credential Access", "Privilege Escalation" ] } ] },
+  "ExecutionResult": { "Status": "Failed", "Score": 0, "ResultMessage": "Found 5 objects." },
+  "TotalResultsCount": 5
+};
+window["Category_2"]["00000000-0000-0000-0000-000000000004"] = {
+  "ResIndicator": { "IsFailed": false, "ShortName": "SI000004", "Name": "Indicator in error", "Weight": 8, "Severity": "High", "State": "Completed", "SecurityFrameworks": [] },
+  "ExecutionResult": { "Status": "Error", "Score": 100, "ResultMessage": "Could not contact the service." },
+  "TotalResultsCount": 0
+};
+</script>
+</body>
+</html>

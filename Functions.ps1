@@ -41,6 +41,21 @@ $Severities = 'Critical', 'High', 'Medium', 'Low', 'Informational'
 # Purple Knight scores go from 0 (worst, red) to 100 (best, green)
 $GageColors = @('#ff0000', '#f9c802', '#a9d70b')
 
+# This file is dot-sourced, so these defaults apply to the calling script
+$PSDefaultParameterValues = @{
+    'New-HTMLSection:HeaderBackGroundColor' = $Colors.Neutral
+    'New-HTMLSection:HeaderTextSize'        = 16
+    'New-HTMLSection:Margin'                = 20
+    'New-ChartBar:Color'                    = $Colors.Primary
+    'New-ChartLine:Color'                   = $Colors.Primary
+    'New-HTMLTable:HTML'                    = { { New-SeverityConditions } }
+    'New-HTMLTable*:WarningAction'          = 'SilentlyContinue'
+    'New-HTMLGage:MinValue'                 = 0
+    'New-HTMLGage:MaxValue'                 = 100
+    'New-HTMLGage:Pointer'                  = $true
+    'New-HTMLGage:LevelColors'              = $GageColors
+}
+
 $Svg = @{
     Up    = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512" style="height: 25px; fill: {0};"><path d="M384 160c-17.7 0-32-14.3-32-32s14.3-32 32-32H544c17.7 0 32 14.3 32 32V288c0 17.7-14.3 32-32 32s-32-14.3-32-32V205.3L342.6 374.6c-12.5 12.5-32.8 12.5-45.3 0L192 269.3 54.6 406.6c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3l160-160c12.5-12.5 32.8-12.5 45.3 0L320 306.7 466.7 160H384z"/></svg>'
     Down  = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512" style="height: 25px; fill: {0};"><path d="M384 352c-17.7 0-32 14.3-32 32s14.3 32 32 32H544c17.7 0 32-14.3 32-32V224c0-17.7-14.3-32-32-32s-32 14.3-32 32v82.7L342.6 137.4c-12.5-12.5-32.8-12.5-45.3 0L192 242.7 54.6 105.4c-12.5-12.5-32.8-12.5-45.3 0s-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0L320 205.3 466.7 352H384z"/></svg>'
@@ -49,8 +64,8 @@ $Svg = @{
 
 function Get-File {
     param (
-        [string]$Directory = 'C:\',
-        [string]$Filter = 'All files (*.*)|*.*'
+        [string]$Directory,
+        [string]$Filter
     )
 
     if (!(Test-Path -Path $Directory -PathType Container)) { $Directory = $PSScriptRoot }
@@ -63,6 +78,28 @@ function Get-File {
     $null = $OpenFileDialog.ShowDialog()
 
     $OpenFileDialog.FileNames
+}
+
+function Get-ReportFiles {
+    param ([string]$ReportPath)
+
+    if (!$ReportPath) {
+        Get-File -Directory "$PSScriptRoot\reports" -Filter 'Purple Knight HTML report (*.html)|*.html' | ForEach-Object { Get-Item -Path $_ }
+    }
+    else {
+        Get-ChildItem -Path $ReportPath -Filter '*.html' -Recurse
+    }
+}
+
+function Initialize-OutputPath {
+    param ([string]$Path)
+
+    # Resolve relative paths from the PowerShell location, not from the process folder
+    $fullPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)
+    if (!(Test-Path -Path $fullPath -PathType Container)) {
+        $null = New-Item -Path $fullPath -ItemType Directory
+    }
+    $fullPath
 }
 
 function ConvertTo-LocalDate {
@@ -169,8 +206,6 @@ function Import-PurpleKnightReport {
                     Name        = $info.Name
                     Score       = $score
                     Results     = [int]$indicator.TotalResultsCount
-                    Weight      = [int]$info.Weight
-                    Exposure    = $info.ExposureType
                     Status      = $status
                     Message     = if ($exec) { $exec.ResultMessage } else { $null }
                     MITRE       = ($info.SecurityFrameworks | Where-Object { $_.Name -eq 'MITRE ATT&CK' }).Tags -join ', '
@@ -196,8 +231,7 @@ function Import-PurpleKnightReport {
             Evaluated        = [int]$summary.TotalEvaluatedCount
             Passed           = [int]$summary.PassedCount
             Categories       = $categories
-            Indicators       = $allIndicators
-            Exposures        = @($allIndicators | Where-Object { $_.Status -eq 'Failed' })
+            Exposures       = @($allIndicators | Where-Object { $_.Status -eq 'Failed' })
             FailedToRun      = @($allIndicators | Where-Object { $_.Status -eq 'Error' })
             IgnoredExposures = @()
             File             = $Path.Name
@@ -251,17 +285,14 @@ function Get-TrendHtml {
     param (
         $Current,
         $Previous,
-        [switch]$HigherIsBetter,
         [string]$Text
     )
 
+    # Used for risk points: higher is worse
     $arrow = $null
     if ($null -ne $Previous) {
-        $good = $Colors.Low
-        $bad = $Colors.Critical
-        if ($HigherIsBetter) { $good, $bad = $bad, $good }
-        if ($Previous -lt $Current) { $arrow = $Svg.Up -f $bad }
-        elseif ($Previous -gt $Current) { $arrow = $Svg.Down -f $good }
+        if ($Previous -lt $Current) { $arrow = $Svg.Up -f $Colors.Critical }
+        elseif ($Previous -gt $Current) { $arrow = $Svg.Down -f $Colors.Low }
         else { $arrow = $Svg.Equal -f 'gray' }
     }
 
@@ -314,6 +345,67 @@ function Select-ExposureColumns {
     $Exposures | Select-Object Points, Severity, ANSSI, Category, IndicatorId, Name, Score, Results, Message
 }
 
+function Get-ScoreRow {
+    # One row of a score table: general values then the score of each category
+    param (
+        $Report,
+        [string[]]$CategoryNames
+    )
+
+    $row = [ordered]@{
+        Date             = $Report.Label
+        Grade            = $Report.Grade
+        'Security score' = $Report.Score
+        'ANSSI'          = $Report.Maturity
+        'Risk points'    = Get-RiskPoints $Report.Exposures
+        Exposures        = $Report.Exposures.Count
+    }
+    $CategoryNames | ForEach-Object {
+        $name = $_
+        $row[$name] = ($Report.Categories | Where-Object { $_.Name -eq $name }).Score
+    }
+    $row
+}
+
+function New-ScoreTable {
+    param (
+        $DataTable,
+        [string[]]$CategoryNames
+    )
+
+    New-HTMLTable -DataTable $DataTable -DefaultSortIndex 0 -DisablePaging {
+        1..5 | ForEach-Object {
+            New-HTMLTableCondition -Name 'ANSSI' -ComparisonType number -Operator eq -Value $_ -BackgroundColor $Colors."Level$_"
+        }
+        New-ScoreConditions -Names (@('Security score') + $CategoryNames)
+    }
+}
+
+function New-ChangesSection {
+    # New exposures (deterioration) next to resolved exposures (improvement)
+    param (
+        [string]$Title,
+        $New,
+        $Resolved,
+        [string]$ResolvedSortColumn = 'Points'
+    )
+
+    New-HTMLSection -HeaderText $Title {
+        New-HTMLPanel {
+            New-HTMLSection -Invisible -Margin 0 -AlignItems center -JustifyContent flex-start -BackgroundColor $Colors.Negative {
+                New-HTMLHeading h2 -HeadingText "New exposures ($(($New | Measure-Object).Count))"
+            }
+            New-HTMLTable -DataTable $New -DefaultSortColumn 'Points' -DefaultSortOrder Descending -HideButtons -DisablePaging
+        }
+        New-HTMLPanel {
+            New-HTMLSection -Invisible -Margin 0 -AlignItems center -JustifyContent flex-start -BackgroundColor $Colors.Positive {
+                New-HTMLHeading h2 -HeadingText "Exposures resolved ($(($Resolved | Measure-Object).Count))"
+            }
+            New-HTMLTable -DataTable $Resolved -DefaultSortColumn $ResolvedSortColumn -DefaultSortOrder Descending -HideButtons -DisablePaging
+        }
+    }
+}
+
 function New-ReportContent {
     # Content of a report tab: one Purple Knight report compared to the previous and initial ones
     param (
@@ -328,10 +420,6 @@ function New-ReportContent {
         $currentIds = @($CurrentReport.Exposures.IndicatorId)
         $riskSolved = Select-ExposureColumns ($PreviousReport.Exposures | Where-Object { $_.IndicatorId -notin $currentIds })
         $riskNew = Select-ExposureColumns ($CurrentReport.Exposures | Where-Object { $_.IndicatorId -notin $previousIds })
-    }
-    else {
-        $riskSolved = $null
-        $riskNew = $null
     }
 
     $categoryNames = @($CurrentReport.Categories | Where-Object { $_.Included } | ForEach-Object { $_.Name })
@@ -438,9 +526,11 @@ function New-ReportContent {
                 New-HTMLPanel {
                     New-HTMLChart -Title $name {
                         New-ChartBarOptions -Vertical
-                        if ($InitialReport) { New-ChartBar -Name 'Initial' -Value ([int]($InitialReport.Categories | Where-Object { $_.Name -eq $name }).Score) }
-                        if ($PreviousReport) { New-ChartBar -Name 'Previous' -Value ([int]($PreviousReport.Categories | Where-Object { $_.Name -eq $name }).Score) }
-                        New-ChartBar -Name 'Current' -Value ([int]($CurrentReport.Categories | Where-Object { $_.Name -eq $name }).Score)
+                        foreach ($bar in @(@('Initial', $InitialReport), @('Previous', $PreviousReport), @('Current', $CurrentReport))) {
+                            # No bar when the report or the category is missing, rather than a fake score of 0
+                            $score = ($bar[1].Categories | Where-Object { $_.Name -eq $name }).Score
+                            if ($null -ne $score) { New-ChartBar -Name $bar[0] -Value $score }
+                        }
                     }
                 }
             }
@@ -449,22 +539,7 @@ function New-ReportContent {
 
     # Comparison between previous and current report
     if ($PreviousReport) {
-        New-HTMLSection -HeaderText 'Improvement & deterioration' {
-            New-HTMLPanel {
-                # The following indicators are not exposed anymore since the last report (improvement)
-                New-HTMLSection -Invisible -Margin 0 -AlignItems center -JustifyContent flex-start -BackgroundColor $Colors.Positive {
-                    New-HTMLHeading h2 -HeadingText 'Exposures resolved'
-                }
-                New-HTMLTable -DataTable $riskSolved -DefaultSortIndex 0 -DefaultSortOrder Descending -HideButtons -DisablePaging
-            }
-            New-HTMLPanel {
-                # The following indicators are exposed since the last report (deterioration)
-                New-HTMLSection -Invisible -Margin 0 -AlignItems center -JustifyContent flex-start -BackgroundColor $Colors.Negative {
-                    New-HTMLHeading h2 -HeadingText 'New exposures'
-                }
-                New-HTMLTable -DataTable $riskNew -DefaultSortIndex 0 -DefaultSortOrder Descending -HideButtons -DisablePaging
-            }
-        }
+        New-ChangesSection -Title "Improvement & deterioration (since $($PreviousReport.Label))" -New $riskNew -Resolved $riskSolved
     }
 
     # Show all exposures
@@ -489,7 +564,8 @@ function New-ReportContent {
     }
 }
 
-function Set-DashboardWidth {
+function Update-DashboardHtml {
+    # Post-processing of the file written by PSWriteHTML: page width and chart gaps
     param (
         [string]$Path,
         [int]$MaxWidth

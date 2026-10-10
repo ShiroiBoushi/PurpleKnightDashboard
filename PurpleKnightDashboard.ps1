@@ -1,9 +1,9 @@
 #Requires -Version 5.1
-#Requires -Modules @{ModuleName='PSWriteHTML';ModuleVersion='1.17.0'}
+#Requires -Modules @{ModuleName='PSWriteHTML';ModuleVersion='1.41.0'}
 
 param(
-    [System.IO.DirectoryInfo]$ReportPath,
-    [System.IO.DirectoryInfo]$OutputPath = "$PSScriptRoot\output",
+    [string]$ReportPath,
+    [string]$OutputPath = "$PSScriptRoot\output",
     [string]$DateFormat = 'yyyy-MM-dd',
     [string]$URI = 'https://www.purple-knight.com',
     [string]$Logo,
@@ -15,30 +15,8 @@ param(
 
 . "$PSScriptRoot\Functions.ps1"
 
-$PSDefaultParameterValues = @{
-    'New-HTMLSection:HeaderBackGroundColor' = $Colors.Neutral
-    'New-HTMLSection:HeaderTextSize'        = 16
-    'New-HTMLSection:Margin'                = 20
-    'New-ChartBar:Color'                    = $Colors.Primary
-    'New-ChartLine:Color'                   = $Colors.Primary
-    'New-HTMLTable:HTML'                    = { { New-SeverityConditions } }
-    'New-HTMLTable*:WarningAction'          = 'SilentlyContinue'
-    'New-HTMLGage:MinValue'                 = 0
-    'New-HTMLGage:MaxValue'                 = 100
-    'New-HTMLGage:Pointer'                  = $true
-    'New-HTMLGage:LevelColors'              = $GageColors
-}
-
-if (!$ReportPath) {
-    $htmlFiles = Get-File -Directory "$PSScriptRoot\reports" -Filter 'Purple Knight HTML report (*.html)|*.html' | ForEach-Object { Get-Item -Path $_ }
-}
-else {
-    $htmlFiles = Get-ChildItem -Path $ReportPath -Filter '*.html' -Recurse
-}
-
-if (!(Test-Path -Path $OutputPath.FullName -PathType Container)) {
-    $null = New-Item -Path $OutputPath.FullName -ItemType Directory
-}
+$htmlFiles = Get-ReportFiles -ReportPath $ReportPath
+$OutputPath = Initialize-OutputPath -Path $OutputPath
 
 $reports = Import-PurpleKnightReports -Files $htmlFiles -ExceptionsPath "$PSScriptRoot\data\exceptions.csv" -DateFormat $DateFormat
 if (!$reports) {
@@ -85,22 +63,7 @@ $reports.Domain | Sort-Object -Unique | ForEach-Object {
                     $_ | Select-Object Points, Severity, ANSSI, Category, IndicatorId, Name, Score, Results, @{Name = 'FirstAppearance'; Expression = { $firstAppearance } }
                 }
 
-                $scores = $domainReports | ForEach-Object {
-                    $report = $_
-                    $row = [ordered]@{
-                        Date             = $report.Label
-                        Grade            = $report.Grade
-                        'Security score' = $report.Score
-                        'ANSSI'          = $report.Maturity
-                        'Risk points'    = Get-RiskPoints $report.Exposures
-                        Exposures        = $report.Exposures.Count
-                    }
-                    $categoryNames | ForEach-Object {
-                        $name = $_
-                        $row[$name] = ($report.Categories | Where-Object { $_.Name -eq $name }).Score
-                    }
-                    [PSCustomObject]$row
-                }
+                $scores = $domainReports | ForEach-Object { [PSCustomObject](Get-ScoreRow -Report $_ -CategoryNames $categoryNames) }
 
                 $exposuresEvolution = $allExposures | Select-Object Severity, ANSSI, Category, IndicatorId, Name
                 $domainReports | Sort-Object Date -Descending | ForEach-Object {
@@ -117,25 +80,10 @@ $reports.Domain | Sort-Object -Unique | ForEach-Object {
                 $chartAxisX = $domainReports.Label
                 $chartLineScore = $domainReports | ForEach-Object { $_.Score }
                 $chartLinePoints = $domainReports | ForEach-Object { Get-RiskPoints $_.Exposures }
-                $chartLineMaturity = $domainReports | ForEach-Object { [int]$_.Maturity }
+                $chartLineMaturity = $domainReports | ForEach-Object { $_.Maturity }
 
                 # New exposures and remediations between the first and the last report
-                New-HTMLSection -HeaderText "Improvement & deterioration ($($firstReport.Label) to $($lastReport.Label))" {
-                    New-HTMLPanel {
-                        # Exposed in the last report but not in the first one (deterioration)
-                        New-HTMLSection -Invisible -Margin 0 -AlignItems center -JustifyContent flex-start -BackgroundColor $Colors.Negative {
-                            New-HTMLHeading h2 -HeadingText "New exposures ($(@($riskNewSince).Count))"
-                        }
-                        New-HTMLTable -DataTable $riskNewSince -DefaultSortIndex 0 -DefaultSortOrder Descending -HideButtons -DisablePaging
-                    }
-                    New-HTMLPanel {
-                        # Exposed in a previous report but not in the last one (improvement)
-                        New-HTMLSection -Invisible -Margin 0 -AlignItems center -JustifyContent flex-start -BackgroundColor $Colors.Positive {
-                            New-HTMLHeading h2 -HeadingText "Exposures resolved ($(@($riskSolvedSince).Count))"
-                        }
-                        New-HTMLTable -DataTable $riskSolvedSince -DefaultSortColumn 'LastAppearance' -DefaultSortOrder Descending -HideButtons -DisablePaging
-                    }
-                }
+                New-ChangesSection -Title "Improvement & deterioration ($($firstReport.Label) to $($lastReport.Label))" -New $riskNewSince -Resolved $riskSolvedSince -ResolvedSortColumn 'LastAppearance'
 
                 # Diagrams for global score
                 New-HTMLSection -HeaderText 'Evolution of security score and exposures' {
@@ -181,7 +129,7 @@ $reports.Domain | Sort-Object -Unique | ForEach-Object {
                                 New-HTMLPanel {
                                     New-HTMLChart -Title $name {
                                         New-ChartAxisX -Name $chartAxisX
-                                        New-ChartLine -Value ($domainReports | ForEach-Object { [int]($_.Categories | Where-Object { $_.Name -eq $name }).Score }) -Name 'Score'
+                                        New-ChartLine -Value ($domainReports | ForEach-Object { ($_.Categories | Where-Object { $_.Name -eq $name }).Score }) -Name 'Score'
                                     }
                                 }
                             }
@@ -191,12 +139,7 @@ $reports.Domain | Sort-Object -Unique | ForEach-Object {
 
                 # Scores
                 New-HTMLSection -HeaderText 'Score & maturity evolution' {
-                    New-HTMLTable -DataTable $scores -DefaultSortIndex 0 -DisablePaging {
-                        1..5 | ForEach-Object {
-                            New-HTMLTableCondition -Name 'ANSSI' -ComparisonType number -Operator eq -Value $_ -BackgroundColor $Colors."Level$_"
-                        }
-                        New-ScoreConditions -Names (@('Security score') + $categoryNames)
-                    }
+                    New-ScoreTable -DataTable $scores -CategoryNames $categoryNames
                 }
 
                 # Exposures evolution
@@ -228,6 +171,6 @@ $reports.Domain | Sort-Object -Unique | ForEach-Object {
         New-HTMLFooter -HTMLContent { $ExecutionContext.InvokeCommand.ExpandString([string](Get-Content -Path "$PSScriptRoot\data\footer.html" -Encoding UTF8)) }
     }
 
-    Set-DashboardWidth -Path $filePath -MaxWidth $MaxWidth
+    Update-DashboardHtml -Path $filePath -MaxWidth $MaxWidth
     if (!$DoNotShow.IsPresent) { Start-Process $filePath }
 }

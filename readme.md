@@ -4,7 +4,7 @@ Generates an HTML dashboard to review the evolution of Purple Knight scores and 
 
 This project is the Purple Knight equivalent of [leobouard/PingCastleDashboard](https://github.com/leobouard/PingCastleDashboard).
 
-**This script requires the module `PSWriteHTML`.** You can install the module through PSGallery using `Install-Module PSWriteHTML`. More information about this module here: <https://github.com/EvotecIT/PSWriteHTML>
+**This script requires the module `PSWriteHTML` (version 1.41.0 or later).** You can install the module through PSGallery using `Install-Module PSWriteHTML`. More information about this module here: <https://github.com/EvotecIT/PSWriteHTML>
 
 ## How to use it?
 
@@ -96,6 +96,12 @@ A Purple Knight HTML report is a single page application which embeds all its da
 - `window["Category_X"]["<indicator UUID>"] = {...}` contains the result of each indicator
 
 The scripts extract these JSON objects with PowerShell (no browser required). Tested with Purple Knight Community 5.0 on Windows PowerShell 5.1 and PowerShell 7.
+
+To check the parser after a Purple Knight update or a code change, run the self-check. It uses a small synthetic report (`testsixture.html`) and needs no module:
+
+```powershell
+.	ests\Test-Parser.ps1
+```
 
 ## Links
 
